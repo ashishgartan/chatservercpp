@@ -112,7 +112,7 @@ void send_chat_history_in_chunks(const std::string &user_id_1, const std::string
 {
     std::string history = get_chat_history(user_id_1, user_id_2); // Get full chat history
     std::cout << "📜 Total history size: " << history.size() << " bytes\n";
-    size_t chunk_size = 4096; // Max packet size (4KB including header)
+    size_t chunk_size = 2048; // Max packet size (2KB including header)
 
     // The header (packetType|queryType|isLastChunk) can take up to 100 bytes (adjust as needed)
     size_t header_size = 4;

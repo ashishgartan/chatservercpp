@@ -13,5 +13,5 @@
 extern std::mutex user_mutex;
 extern std::map<std::string, std::string> users;
 
-ACKPacket register_user(LoginSignupPacket lsp);
-ACKPacket login_user(LoginSignupPacket lsp);
+AeroProtocolPacket register_user(AeroProtocolPacket authPacket);
+AeroProtocolPacket login_user(AeroProtocolPacket authPacket);

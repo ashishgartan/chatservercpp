@@ -1,6 +1,6 @@
 #include "ChatClient.h"
 #include "../packets/FilePacket.h"
-
+#include <filesystem>
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <unistd.h>
 #include <algorithm>
+#include <vector>
 // 🎨 Terminal Colors
 #define RESET "\033[0m"
 #define BLACK "\033[30m"
@@ -24,6 +25,8 @@
 // Function to send a file by chunks using FilePackets
 void ChatClient::send_file_by_chunks(const std::string &receiver, const std::string &full_path, int client_socket)
 {
+    std::filesystem::path file_path(full_path);
+    std::string filename = file_path.filename().string();
     FILE *file = fopen(full_path.c_str(), "rb");
     if (!file)
     {
@@ -36,39 +39,44 @@ void ChatClient::send_file_by_chunks(const std::string &receiver, const std::str
     size_t filesize = ftell(file);
     rewind(file);
 
-    size_t chunk_size = 4096;                                     // Chunk size
-    size_t num_chunks = (filesize + chunk_size - 1) / chunk_size; // Total chunks
+    // The header (packetType|queryType) can take up to 100 bytes (adjust as needed)
+    size_t header_size = 8;
+    size_t chunk_size = 2048;
+    // Calculate the available space for the data (taking into account the header size)
+    size_t available_data_size = chunk_size - header_size;                                                  // Chunk size
+    size_t chunks_count = (filesize / available_data_size) + (filesize % available_data_size == 0 ? 0 : 1); // Total chunks
     size_t bytes_sent = 0;
-
-    for (size_t chunk_number = 0; chunk_number < num_chunks; ++chunk_number)
+    std::cout << "📦 Number of chunks to send: " << chunks_count << "\n";
+    FilePacket filePacket;
+    filePacket.sender = user_id;
+    filePacket.receiver = receiver;
+    filePacket.total_size = filesize;
+    filePacket.filename = filename;
+    for (size_t chunk_number = 0; chunk_number < chunks_count; ++chunk_number)
     {
-        FilePacket packet;
-        packet.sender = user_id;
-        packet.receiver = receiver;
-        packet.packet_number = chunk_number;
-        packet.total_size = filesize;
+        filePacket.packet_number = chunk_number;
 
         // Read the chunk data
         size_t bytes_to_read = std::min(chunk_size, filesize - chunk_number * chunk_size);
-        char buffer[bytes_to_read];
-        fread(buffer, 1, bytes_to_read, file);
+        std::vector<char> buffer(bytes_to_read);
+        fread(buffer.data(), 1, bytes_to_read, file);
+        filePacket.data.assign(buffer.begin(), buffer.end());
 
-        packet.data.assign(buffer, bytes_to_read); // Store chunk data in the packet
-
-        // Serialize the packet before sending
-        std::string serialized_data = packet.serialize();
+        // Serialize the filePacket before sending
+        std::string serialized_data = filePacket.serialize();
         send(client_socket, serialized_data.c_str(), serialized_data.size(), 0);
         usleep(100000); // Simulate network delay
 
         bytes_sent += bytes_to_read;
-
+        std::cout << GREEN << "\r📤 Sending: Packet No:" << chunk_number+1 << RESET;
         // 📈 Show percentage
-        int percent = static_cast<int>((static_cast<double>(bytes_sent) / filesize) * 100);
-        std::cout << GREEN << "\r📤 Sending: " << percent << "% complete." << RESET << std::flush;
+        // int percent = static_cast<int>((static_cast<double>(bytes_sent) / filesize) * 100);
+        // std::cout << GREEN << "\r📤 Sending: " << percent << "% complete." << RESET << std::flush;
     }
 
     fclose(file);
     std::cout << GREEN << "\n✅ File sent successfully." << RESET << "\n";
+    return;
 }
 
 void ChatClient::receive_data(FilePacket filePacket)

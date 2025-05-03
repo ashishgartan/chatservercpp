@@ -1,5 +1,4 @@
 #include "ChatClient.h"
-// #include "FileTransfer.h"
 #include <iostream>
 #include <cstring>
 #include <unistd.h>
@@ -12,20 +11,14 @@
 #include "../packets/FilePacket.h"
 #include "../packets/ACKPacket.h"
 #include "../packets/PacketType.h"
+#include "../packets/Packet.h"
+#include "../packets/CommandType.h"
 
 #define GREEN "\033[32m"
 #define CYAN "\033[36m"
 #define RED "\033[31m"
 #define YELLOW "\033[33m"
 #define RESET "\033[0m"
-/*
-    LOGIN_PACKET = 1,
-    REGISTER_PACKET = 2,
-    CHAT_MESSAGE_PACKET = 3,
-    FILE_PACKET = 4,
-    ACK_PACKET = 5,
-    QUERY_PACKET = 6
-*/
 
 /**
  *
@@ -58,7 +51,6 @@ ChatClient::ChatClient() : is_running(true)
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
     }
-    std::cout << "✅ Client socket created successfully.\n";
 
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
@@ -67,11 +59,12 @@ ChatClient::ChatClient() : is_running(true)
 
     if (connect(client_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
     {
-        perror("Connection to server failed");
+        perror("Connection failed");
         close(client_socket);
         exit(EXIT_FAILURE);
     }
-    std::cout << "🔗 Connected to server.\n";
+
+    std::cout << "✅ Connected to server.\n";
 
     int choice;
     while (true)
@@ -80,40 +73,39 @@ ChatClient::ChatClient() : is_running(true)
         std::cin >> choice;
         if (choice != 1 && choice != 2)
         {
-            std::cout << "Invalid Choice.🫩 \n";
+            std::cout << "Invalid choice.\n";
             continue;
         }
 
-        int type = (choice == 1 ? 1 : 2);
-        std::string user_id;
-        std::string password;
+        std::string user_id, password;
 
-        std::cout << "\nEnter user_id number: ";
+        std::cout << "Enter user ID: ";
         std::cin >> user_id;
         std::cout << "Enter password: ";
         std::cin >> password;
 
-        // Create and send login/signup packet
-        LoginSignupPacket lsp(user_id, password);
-        lsp.packetType = type;
-        std::string serialized_packet = lsp.serialize();
-        send(client_socket, serialized_packet.c_str(), serialized_packet.size(), 0);
+        // Create Packet for login/register request
+        AeroProtocolPacket packet;
+        packet.header.packetType = (choice == 1 ? LOGIN_REQUEST : REGISTER_REQUEST);
+        packet.header.timestamp = std::time(nullptr);
+        packet.username = user_id;
+        packet.password = password;
+
+        // std::cout << packet.toString();
+
+        // Serialize and send the packet
+        auto serialized_data = packet.serialize();
+        send(client_socket, serialized_data.data(), serialized_data.size(), 0);
 
         // Receive ACK
-        ACKPacket ackpacket;
         char ack_buffer[1024] = {0};
         recv(client_socket, ack_buffer, sizeof(ack_buffer), 0);
-        ackpacket.deserialize(ack_buffer);
-        if (ackpacket.status == 1)
+        auto ack_packet = AeroProtocolPacket::deserialize(std::vector<char>(ack_buffer, ack_buffer + sizeof(ack_buffer)));
+
+        if (ack_packet.header.packetType == static_cast<int>(ACKNOWLEDGMENT))
         {
-            std::cout << GREEN "Success: " << ackpacket.message << RESET << std::endl;
-            this->user_id = user_id; // Save user id for message sending
-            this->start();
+            std::cout << "Server: " << std::string(ack_packet.payload.begin(), ack_packet.payload.end()) << std::endl;
             break;
-        }
-        else
-        {
-            std::cout << RED "Failure: " << ackpacket.message << RESET << std::endl;
         }
     }
 }
@@ -388,15 +380,18 @@ void ChatClient::receiveMessages()
             }
             else if (queryPacket.queryType == 3)
             {
-                if(queryPacket.data == "1"){
-                    std::cout <<GREEN<<"✅ Account deleted successfully." << RESET<<std::endl;
+                if (queryPacket.data == "1")
+                {
+                    std::cout << GREEN << "✅ Account deleted successfully." << RESET << std::endl;
                 }
-                else{
-                    std::cout <<RED<<"❌ Error deleting account" << RESET<<std::endl;
+                else
+                {
+                    std::cout << RED << "❌ Error deleting account" << RESET << std::endl;
                 }
             }
-            else if(queryPacket.queryType == 4){
-                std::cout<<GREEN<<queryPacket.data<<RESET<<std::endl;
+            else if (queryPacket.queryType == 4)
+            {
+                std::cout << GREEN << queryPacket.data << RESET << std::endl;
             }
         }
         else
