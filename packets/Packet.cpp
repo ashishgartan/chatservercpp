@@ -4,7 +4,11 @@
 #include <iostream>
 #include <sstream>
 #include <iomanip> // for formatting
-
+#define GREEN "\033[32m"
+#define CYAN "\033[36m"
+#define RED "\033[31m"
+#define YELLOW "\033[33m"
+#define RESET "\033[0m"
 // Fallback for systems missing htobe64
 // uint64_t htobe64(uint64_t val)
 // {
@@ -71,21 +75,32 @@ std::vector<char> AeroProtocolPacket::serialize()
         serializedPayload.insert(serializedPayload.end(), fileName.begin(), fileName.end());
 
         // Add raw file data
-        serializedPayload.insert(serializedPayload.end(), fileData.begin(), fileData.end());
+        serializedPayload.insert(serializedPayload.end(), data.begin(), data.end());
         break;
     }
+    case COMMAND:
+    {
+        uint32_t commandTypeLen = htonl(sizeof(commandType));
+        serializedPayload.insert(serializedPayload.end(), reinterpret_cast<char *>(&commandTypeLen), reinterpret_cast<char *>(&commandTypeLen) + sizeof(commandTypeLen));
+        serializedPayload.insert(serializedPayload.end(), reinterpret_cast<char *>(&commandType), reinterpret_cast<char *>(&commandType) + sizeof(commandType));
 
+        // uint32_t messageLen = htonl(message.size());
+        // serializedPayload.insert(serializedPayload.end(), reinterpret_cast<char *>(&messageLen), reinterpret_cast<char *>(&messageLen) + sizeof(messageLen));
+        // serializedPayload.insert(serializedPayload.end(), message.begin(), message.end());
+
+        // uint32_t messageLen = htonl(message.size());
+        // serializedPayload.insert(serializedPayload.end(), reinterpret_cast<char *>(&messageLen), reinterpret_cast<char *>(&messageLen) + sizeof(messageLen));
+        // serializedPayload.insert(serializedPayload.end(), message.begin(), message.end());
+    }
         // case AUDIO_CALL:
         // case VIDEO_CALL:
         // {
         //     uint32_t senderLen = htonl(senderId.size());
         //     serializedPayload.insert(serializedPayload.end(), reinterpret_cast<char *>(&senderLen), reinterpret_cast<char *>(&senderLen) + sizeof(senderLen));
         //     serializedPayload.insert(serializedPayload.end(), senderId.begin(), senderId.end());
-
         //     uint32_t receiverLen = htonl(receiverId.size());
         //     serializedPayload.insert(serializedPayload.end(), reinterpret_cast<char *>(&receiverLen), reinterpret_cast<char *>(&receiverLen) + sizeof(receiverLen));
         //     serializedPayload.insert(serializedPayload.end(), receiverId.begin(), receiverId.end());
-
         //     uint32_t callDataLen = htonl(callMetadata.size());
         //     serializedPayload.insert(serializedPayload.end(), reinterpret_cast<char *>(&callDataLen), reinterpret_cast<char *>(&callDataLen) + sizeof(callDataLen));
         //     serializedPayload.insert(serializedPayload.end(), callMetadata.begin(), callMetadata.end());
@@ -94,9 +109,9 @@ std::vector<char> AeroProtocolPacket::serialize()
 
     case ACKNOWLEDGMENT:
     {
-        uint32_t ackLen = htonl(ackMessage.size());
+        uint32_t ackLen = htonl(message.size());
         serializedPayload.insert(serializedPayload.end(), reinterpret_cast<char *>(&ackLen), reinterpret_cast<char *>(&ackLen) + sizeof(ackLen));
-        serializedPayload.insert(serializedPayload.end(), ackMessage.begin(), ackMessage.end());
+        serializedPayload.insert(serializedPayload.end(), message.begin(), message.end());
         break;
     }
 
@@ -125,12 +140,8 @@ std::vector<char> AeroProtocolPacket::serialize()
 AeroProtocolPacket AeroProtocolPacket::deserialize(AeroProtocolHeader networkHeader, const char *received_payload)
 {
     AeroProtocolPacket pkt;
+    pkt.header = networkHeader;
 
-    // 🎯 Convert all header fields from network byte order to host byte order
-    pkt.header.packetType = ntohl(networkHeader.packetType);
-    pkt.header.payloadSize = ntohl(networkHeader.payloadSize);
-    pkt.header.sequenceNumber = ntohl(networkHeader.sequenceNumber);
-    pkt.header.timestamp = be64toh(networkHeader.timestamp); // 64-bit big endian to host
 
     // 📦 Resize payload container to hold the actual data
     pkt.payload.resize(pkt.header.payloadSize);
@@ -141,88 +152,157 @@ AeroProtocolPacket AeroProtocolPacket::deserialize(AeroProtocolHeader networkHea
     // 🔍 Begin parsing the payload
     const char *ptr = pkt.payload.data();
 
-    // 🧵 Handle packet types based on the value
+    const char *payloadEnd = pkt.payload.data() + pkt.payload.size();
+
     switch (pkt.header.packetType)
     {
     case MESSAGE:
     {
-        // 🧱 Step 1: Read sender ID length (4 bytes)
         uint32_t senderLen;
+        if (ptr + sizeof(senderLen) > payloadEnd)
+        {
+            std::cerr << RED << "❌ MESSAGE: Incomplete sender length.\n"
+                      << RESET;
+            return pkt;
+        }
         std::memcpy(&senderLen, ptr, sizeof(senderLen));
         senderLen = ntohl(senderLen);
-        ptr += sizeof(senderLen); // ⏭️ Move past the length field
+        ptr += sizeof(senderLen);
 
-        // 📛 Step 2: Read sender ID string
-        std::string senderId(ptr, senderLen);
-        ptr += senderLen; // ⏭️ Move past the sender string
+        if (ptr + senderLen > payloadEnd)
+        {
+            std::cerr << RED << "❌ MESSAGE: Incomplete sender string.\n"
+                      << RESET;
+            return pkt;
+        }
+        pkt.senderId = std::string(ptr, senderLen);
+        ptr += senderLen;
 
-        // 🧱 Step 3: Read receiver ID length (4 bytes)
         uint32_t receiverLen;
+        if (ptr + sizeof(receiverLen) > payloadEnd)
+        {
+            std::cerr << RED << "❌ MESSAGE: Incomplete receiver length.\n"
+                      << RESET;
+            return pkt;
+        }
         std::memcpy(&receiverLen, ptr, sizeof(receiverLen));
         receiverLen = ntohl(receiverLen);
         ptr += sizeof(receiverLen);
 
-        // 📛 Step 4: Read receiver ID string
-        std::string receiverId(ptr, receiverLen);
+        if (ptr + receiverLen > payloadEnd)
+        {
+            std::cerr << RED << "❌ MESSAGE: Incomplete receiver string.\n"
+                      << RESET;
+            return pkt;
+        }
+        pkt.receiverId = std::string(ptr, receiverLen);
         ptr += receiverLen;
 
-        // 🧱 Step 5: Read message length (4 bytes)
         uint32_t msgLen;
+        if (ptr + sizeof(msgLen) > payloadEnd)
+        {
+            std::cerr << RED << "❌ MESSAGE: Incomplete message length.\n"
+                      << RESET;
+            return pkt;
+        }
         std::memcpy(&msgLen, ptr, sizeof(msgLen));
         msgLen = ntohl(msgLen);
         ptr += sizeof(msgLen);
 
-        // 💬 Step 6: Read actual message
-        std::string message(ptr, msgLen);
-
-        // 🖨️ Log it
-        std::cout << "[💬 MESSAGE] From: " << senderId << ", To: " << receiverId << ", Msg: " << message << "\n";
+        if (ptr + msgLen > payloadEnd)
+        {
+            std::cerr << RED << "❌ MESSAGE: Incomplete message data.\n"
+                      << RESET;
+            return pkt;
+        }
+        pkt.message = std::string(ptr, msgLen);
         break;
     }
 
     case ACKNOWLEDGMENT:
     {
-        // ✅ Step 1: Read ack message length
         uint32_t ackLen;
+        if (ptr + sizeof(ackLen) > payloadEnd)
+        {
+            std::cerr << RED << "❌ ACK: Incomplete ack length.\n"
+                      << RESET;
+            return pkt;
+        }
         std::memcpy(&ackLen, ptr, sizeof(ackLen));
         ackLen = ntohl(ackLen);
         ptr += sizeof(ackLen);
 
-        // 📨 Step 2: Read actual acknowledgment message
-        std::string ackMessage(ptr, ackLen);
-
-        // 🖨️ Log it
-        std::cout << "[📨 ACK] Message: " << ackMessage << "\n";
+        if (ptr + ackLen > payloadEnd)
+        {
+            std::cerr << RED << "❌ ACK: Incomplete ack message.\n"
+                      << RESET;
+            return pkt;
+        }
+        pkt.message = std::string(ptr, ackLen);
         break;
     }
 
+    case REGISTER_REQUEST:
     case LOGIN_REQUEST:
     {
-        // 👤 Step 1: Read username length
         uint32_t userLen;
+        if (ptr + sizeof(userLen) > payloadEnd)
+        {
+            std::cerr << RED << "❌ LOGIN/REGISTER: Incomplete username length.\n"
+                      << RESET;
+            return pkt;
+        }
         std::memcpy(&userLen, ptr, sizeof(userLen));
         userLen = ntohl(userLen);
         ptr += sizeof(userLen);
 
-        // 👤 Step 2: Read username
-        std::string username(ptr, userLen);
+        if (ptr + userLen > payloadEnd)
+        {
+            std::cerr << RED << "❌ LOGIN/REGISTER: Incomplete username.\n"
+                      << RESET;
+            return pkt;
+        }
+        pkt.username = std::string(ptr, userLen);
         ptr += userLen;
 
-        // 🔐 Step 3: Read password length
         uint32_t passLen;
+        if (ptr + sizeof(passLen) > payloadEnd)
+        {
+            std::cerr << RED << "❌ LOGIN/REGISTER: Incomplete password length.\n"
+                      << RESET;
+            return pkt;
+        }
         std::memcpy(&passLen, ptr, sizeof(passLen));
         passLen = ntohl(passLen);
         ptr += sizeof(passLen);
 
-        // 🔐 Step 4: Read password
-        std::string password(ptr, passLen);
-
-        // 🖨️ Log it
-        std::cout << "[🔐 LOGIN] Username: " << username << ", Password: " << password << "\n";
+        if (ptr + passLen > payloadEnd)
+        {
+            std::cerr << RED << "❌ LOGIN/REGISTER: Incomplete password.\n"
+                      << RESET;
+            return pkt;
+        }
+        pkt.password = std::string(ptr, passLen);
         break;
     }
 
-    // 🧩 TODO: Add more packet types like REGISTER, FILE, LOGOUT, etc.
+    case FILE_CHUNK:
+    {
+        std::cerr << YELLOW << "⚠️ FILE_CHUNK: Deserialization not yet implemented.\n"
+                  << RESET;
+        break;
+    }
+    case COMMAND:
+    {
+        std::cerr << YELLOW << "⚠️ COMMAND: Deserialization not yet implemented.\n"
+                  << RESET;
+        break;
+    }
+
+    default:
+        std::cerr << RED << "❌ Unknown packet type: " << pkt.header.packetType << "\n"
+                  << RESET;
+        break;
     }
 
     // ✅ Return the fully parsed packet
@@ -263,7 +343,7 @@ std::string AeroProtocolPacket::toString()
         oss << "From: " << senderId << "\n";
         oss << "To: " << receiverId << "\n";
         oss << "File Name: " << fileName << "\n";
-        oss << "File Size: " << fileData.size() << " bytes\n";
+        oss << "File Size: " << data.size() << " bytes\n";
         break;
 
         // case AUDIO_CALL:
@@ -282,7 +362,7 @@ std::string AeroProtocolPacket::toString()
 
     case ACKNOWLEDGMENT:
         oss << "[ACKNOWLEDGMENT]\n";
-        oss << "Message: " << ackMessage << "\n";
+        oss << "Message: " << message << "\n";
         break;
 
     default:

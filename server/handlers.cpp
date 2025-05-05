@@ -14,15 +14,10 @@
 #include <map>
 #include <unordered_set>
 #include <fstream>
-#include "../packets/QueryPacket.h"
-#include "../packets/LoginSignupPacket.h"
-#include "../packets/ChatMessagePacket.h"
-#include "../packets/FilePacket.h"
-#include "../packets/ACKPacket.h"
+
 #include "../packets/PacketType.h"
 #include "../packets/Packet.h"
 #include "../packets/CommandType.h"
-
 
 /*
 Command	        Query Code	    Example Usage
@@ -57,281 +52,262 @@ std::mutex client_mutex;
 // 🚀 Handles a single client after connection is accepted
 void handle_client(int client_socket)
 {
-    // Step 1: Receive the header first
-    AeroProtocolHeader header;
-    int bytes_received = 0;
-    while (bytes_received < sizeof(AeroProtocolHeader))
+    std::string username;
+    while (1)
     {
-        int chunk = recv(client_socket, ((char *)&header) + bytes_received, sizeof(AeroProtocolHeader) - bytes_received, 0);
-        if (chunk <= 0)
+        // Step 1: Receive the header first
+        AeroProtocolHeader header;
+        long unsigned int bytes_received = 0;
+        while (bytes_received < sizeof(AeroProtocolHeader))
         {
-            std::cout << "❌ Failed to receive header data from client.\n";
-            return;
-        }
-        bytes_received += chunk;
-    }
-
-    std::cout << "Received header: PacketType=" << header.packetType
-              << ", PayloadSize=" << header.payloadSize
-              << ", SequenceNumber=" << header.sequenceNumber
-              << ", Timestamp=" << header.timestamp << "\n";
-
-    // Step 2: Receive the payload based on the payload size in the header
-    uint32_t payload_size = header.payloadSize;
-    if (payload_size == 0)
-    {
-        std::cout << "No payload data to receive.\n";
-        return; // No payload to process
-    }
-
-    // Receive the actual payload
-    char *received_payload = new char[payload_size];
-    int payload_received = 0;
-    while (payload_received < payload_size)
-    {
-        int chunk = recv(client_socket, received_payload + payload_received, payload_size - payload_received, 0);
-        if (chunk <= 0)
-        {
-            std::cout << "❌ Failed to receive payload data from client.\n";
-            delete[] received_payload;
-            return;
-        }
-        payload_received += chunk;
-    }
-
-    std::cout << "Received payload of size: " << payload_received << " bytes.\n";
-
-    // Step 3: Deserialize the packet and process the data based on packet type
-    AeroProtocolPacket packet;
-    packet.header = header;
-    packet = packet.deserialize(header, received_payload);
-    delete[] received_payload; // Clean up the payload buffer after deserialization
-    std::cout << "Processing packet of type: " << packet.header.packetType << std::endl;
-
-    AeroProtocolPacket ackPacket;
-
-    switch (packet.header.packetType)
-    {
-    case LOGIN_REQUEST:
-    {
-        std::cout << "🔐 Login attempt for user: " << packet.username << "\n";
-
-        // Optional: logic to handle multiple logins
-
-        ackPacket = login_user(packet); // Should return ACK packet
-
-        // ✅ Step 3: Save client as online
-        {
-            std::lock_guard<std::mutex> lock(client_mutex);
-            clients[packet.username] = client_socket;
-            std::cout << " ✅ User " << packet.username << " logged in successfully.\nCurrent online users: \n";
-            for (const auto &[user, _] : clients)
+            int chunk = recv(client_socket, ((char *)&header) + bytes_received, sizeof(AeroProtocolHeader) - bytes_received, 0);
+            if (chunk <= 0)
             {
-                std::cout << user << " ";
+                std::cout << "❌ Failed to receive header data from client.\n";
+                return;
             }
-            std::cout << "\n";
+            bytes_received += chunk;
         }
-        std::vector<char> serialized_response = ackPacket.serialize();
-        send(client_socket, serialized_response.data(), serialized_response.size(), 0);
+        header.packetType = ntohl(header.packetType);
+        header.payloadSize = ntohl(header.payloadSize);
+        header.sequenceNumber = ntohl(header.sequenceNumber);
+        header.timestamp = be64toh(header.timestamp);
+        // Step 2: Convert header fields from network to host byte order
+        // Just for testing purpose...
+        std::cout << "Received header: \nPacketType=" << header.packetType
+                  << ", PayloadSize=" << header.payloadSize
+                  << ", SequenceNumber=" << header.sequenceNumber << "\n";
+        std::time_t t = header.timestamp;
+        std::cout << "Login Attempt at: " << std::asctime(std::localtime(&t));
 
-        break;
-    }
-    case REGISTER_REQUEST:
-    {
-        std::cout << "📜 Registering user: " << packet.username << "\n";
-        ackPacket = register_user(packet); // Should return ACK packet
-        break;
-    }
-    case MESSAGE:
-    {
-        save_message(packet.senderId, packet.receiverId, packet.message);
-        std::cout << "💬 Message from " << packet.senderId << " to " << packet.receiverId << ": " << packet.message << "\n";
-
-        std::lock_guard<std::mutex> lock(client_mutex);
-        if (clients.count(packet.receiverId))
+        // Step 2: Receive the payload based on the payload size in the header
+        uint32_t payload_size = header.payloadSize;
+        std::cout << "Payload Size:" << payload_size << "\n";
+        if (payload_size == 0)
         {
-            ackPacket.message = "Message sent";
-            std::cout << "📤 Message sent to online receiver: " << packet.receiverId << "\n";
+            std::cout << "No payload data to receive.\n";
+            return; // No payload to process
         }
-        else
+
+        // Receive the actual payload
+        char *received_payload = new char[payload_size];
+        int payload_received = 0;
+        while (payload_received < payload_size)
         {
-            ackPacket.message = "User offline. Message stored.";
-            std::cout << "❌ User " << packet.receiverId << " is offline. Message stored for later delivery.\n";
-        }
-        std::vector<char> serialized_response = ackPacket.serialize();
-        send(client_socket, serialized_response.data(), serialized_response.size(), 0);
-        break;
-    }
-    case FILE_CHUNK:
-    {
-        std::cout << "📁 File packet transfer from " << packet.senderId << " to " << packet.receiverId << "\n";
-
-        int receiver_socket = clients[packet.receiverId];
-        std::vector<char> serialized_response = packet.serialize();
-        send(receiver_socket, serialized_response.data(), sizeof(serialized_response.data()), 0);
-        std::cout << "📤 File sent to online receiver: " << packet.receiverId << "\n";
-        break;
-    }
-    case ACKNOWLEDGMENT:
-    {
-        break;
-    }
-    default:
-        // Optional: handle unknown packet types
-        break;
-    }
-
-    // Serialize and send ACK back
-    std::vector<char> serialized_response = ackPacket.serialize();
-    send(client_socket, serialized_response.data(), serialized_response.size(), 0);
-
-    while (true)
-    {
-
-        // 📦 Handle commands like /history, /logout, etc.
-        if (type == 6)
-        {
-            QueryPacket queryPacket;
-            queryPacket.deserialize(received_serialized_data);
-            int queryType = queryPacket.queryType;
-            if (queryType == 0)
+            std::cout << "Payload Received:" << payload_received << "\n";
+            int chunk = recv(client_socket, received_payload + payload_received, payload_size - payload_received, 0);
+            if (chunk <= 0)
             {
-                std::string user_id = queryPacket.data;
-
-                // 🔍 Check if the user is in the clients map
-                queryPacket.data = (clients.find(user_id) != clients.end()) ? "Online" : "Offline";
-                serialized_response = queryPacket.serialize();
-                send(client_socket, serialized_response.c_str(), serialized_response.size(), 0);
+                std::cout << "❌ Failed to receive payload data from client.\n";
+                return;
             }
-            else if (queryType == 1)
+            payload_received += chunk;
+        }
+
+        std::cout << "Received payload of size: " << payload_received << " bytes.\n";
+
+        // Step 3: Deserialize the packet and process the data based on packet type
+        AeroProtocolPacket packet;
+        packet = AeroProtocolPacket::deserialize(header, received_payload);
+        delete[] received_payload; // Clean up the payload buffer after deserialization
+        std::cout << "Processing packet of type: " << packet.header.packetType << std::endl;
+
+        AeroProtocolPacket ackPacket;
+        std::vector<char> serialized_response;
+        switch (packet.header.packetType)
+        {
+        case LOGIN_REQUEST:
+        {
+            std::cout << "🔐 Login attempt for user: " << packet.username << "\n";
+            username=packet.username;
+            // Optional: logic to handle multiple logins
+
+            ackPacket = login_user(packet); // Should return ACK packet
+
+            // ✅ Step 3: Save client as online
             {
                 std::lock_guard<std::mutex> lock(client_mutex);
-                clients.erase(lsp.user_id);
-                queryPacket.data = "Logged out successfully";
-                serialized_response = queryPacket.serialize();
-                send(client_socket, serialized_response.c_str(), serialized_response.size(), 0);
-                std::cout << "✅ User " << lsp.user_id << " logged out successfully.\n";
+                clients[packet.username] = client_socket;
+                std::cout << " ✅ User " << packet.username << " logged in successfully.\nCurrent online users: \n";
+                for (const auto &[user, _] : clients)
+                {
+                    std::cout << user << " ";
+                }
+                std::cout << "\n";
+            }
+            std::vector<char> serialized_response = ackPacket.serialize();
+            send(client_socket, serialized_response.data(), serialized_response.size(), 0);
+
+            break;
+        }
+        case REGISTER_REQUEST:
+        {
+            std::cout << "📜 Registering user: " << packet.username << "\n";
+            ackPacket = register_user(packet); // Should return ACK packet
+            break;
+        }
+        case MESSAGE:
+        {
+            save_message(packet.senderId, packet.receiverId, packet.message);
+            std::cout << "💬 Message from " << packet.senderId << " to " << packet.receiverId << ": " << packet.message << "\n";
+
+            std::lock_guard<std::mutex> lock(client_mutex);
+            if (clients.count(packet.receiverId))
+            {
+                ackPacket.message = "Message sent";
+                std::cout << "📤 Message sent to online receiver: " << packet.receiverId << "\n";
+            }
+            else
+            {
+                ackPacket.message = "User offline. Message stored.";
+                std::cout << "❌ User " << packet.receiverId << " is offline. Message stored for later delivery.\n";
+            }
+            std::vector<char> serialized_response = ackPacket.serialize();
+            send(client_socket, serialized_response.data(), serialized_response.size(), 0);
+            break;
+        }
+        case FILE_CHUNK:
+        {
+            std::cout << "📁 File packet transfer from " << packet.senderId << " to " << packet.receiverId << "\n";
+
+            int receiver_socket = clients[packet.receiverId];
+            std::vector<char> serialized_response = packet.serialize();
+            send(receiver_socket, serialized_response.data(), serialized_response.size(), 0);
+            std::cout << "📤 File sent to online receiver: " << packet.receiverId << "\n";
+            break;
+        }
+        case ACKNOWLEDGMENT:
+        {
+            break;
+        }
+        case COMMAND:
+        {
+            switch (packet.commandType)
+            {
+            case CHECK_ONLINE:
+            {
+                std::string user_id(packet.payload.data());
+                // 🔍 Check if the user is in the clients map
+                std::string response = (clients.find(user_id) != clients.end()) ? "Online" : "Offline";
+                std::vector<char> rvec(response.begin(), response.end());
+                ackPacket.payload = rvec;
+                serialized_response = ackPacket.serialize();
+                send(client_socket, serialized_response.data(), serialized_response.size(), 0);
                 break;
             }
-            else if (queryType == 2)
+            case LOGOUT:
             {
-                std::string receiver_id = queryPacket.data;
-                std::string sender_id = lsp.user_id;
-                send_chat_history_in_chunks(sender_id, receiver_id, clients[sender_id]);
+                std::lock_guard<std::mutex> lock(client_mutex);
+                clients.erase(packet.senderId);
+                std::string response = "Logged out successfully";
+                std::vector<char> rvec(response.begin(), response.end());
+                ackPacket.payload = rvec;
+                serialized_response = ackPacket.serialize();
+                send(client_socket, serialized_response.data(), serialized_response.size(), 0);
+                std::cout << "✅ User " << packet.senderId << " logged out successfully.\n";
+                break;
             }
-            else if (queryType == 3)
+            case CHAT_HISTORY:
+            {
+                std::string receiver_id = packet.receiverId;
+                std::string sender_id = packet.senderId;
+                send_chat_history_in_chunks(sender_id, receiver_id, clients[sender_id]);
+                break;
+            }
+            case DELETE_ACCOUNT:
             {
                 std::cout << YELLOW << "⚙️  Received delete_account request from user ID: "
-                          << lsp.user_id << RESET << std::endl;
+                          << packet.senderId << RESET << std::endl;
 
-                bool deleteSuccess = delete_account(lsp.user_id, clients[lsp.user_id]);
+                bool deleteSuccess = delete_account(packet.senderId, clients[packet.senderId]);
 
                 if (deleteSuccess)
-                {
-                    queryPacket.data = "1";
                     std::cout << GREEN << "✔️  Account deleted for user ID: "
-                              << lsp.user_id << RESET << std::endl;
-                }
+                              << packet.senderId << RESET << std::endl;
                 else
-                {
-                    queryPacket.data = "0";
                     std::cout << RED << "❌ Error deleting account for user ID: "
-                              << lsp.user_id << RESET << std::endl;
-                }
+                              << packet.senderId << RESET << std::endl;
+                ackPacket.statusCode = (deleteSuccess) ? 1 : 0;
+                serialized_response = ackPacket.serialize();
+                send(client_socket, serialized_response.data(), serialized_response.size(), 0);
 
-                serialized_response = queryPacket.serialize();
-
-                send(client_socket, serialized_response.c_str(), serialized_response.size(), 0);
-
-                std::cout << CYAN << "📤 Response sent to client: " << queryPacket.data
+                std::cout << CYAN << "📤 Response sent to client: " << packet.senderId
                           << RESET << std::endl;
 
                 if (deleteSuccess)
                 {
                     // ✅ Close client connection
-                    std::cout << YELLOW << "🔌 Disconnecting user ID: " << lsp.user_id << RESET << std::endl;
+                    std::cout << YELLOW << "🔌 Disconnecting user ID: " << packet.senderId << RESET << std::endl;
 
                     // ✅ Remove from map safely
                     {
                         std::lock_guard<std::mutex> lock(client_mutex);
-                        clients.erase(lsp.user_id);
+                        clients.erase(packet.senderId);
                     }
 
                     close(client_socket); // Close the socket
                     return;               // Exit the thread
                 }
+                break;
             }
-            else if (queryType == 4)
+            case ONLINE_USERS:
             {
                 std::string onlineUsers = get_online_users();
-                queryPacket.data = onlineUsers;
-                serialized_response = queryPacket.serialize();
-                std::cout << "📡 Sending online users list to user: " << lsp.user_id << "\n";
-                send(client_socket, serialized_response.c_str(), serialized_response.length(), 0);
+                ackPacket.payload = std::vector<char>(onlineUsers.begin(), onlineUsers.end());
+                serialized_response = ackPacket.serialize();
+                std::cout << "📡 Sending online users list to user: " << packet.senderId << "\n";
+                send(client_socket, serialized_response.data(), serialized_response.size(), 0);
+                break;
             }
-            else if (queryType == 5)
+            case CLEAR_CHAT:
             {
             }
-            else if (queryType == 6)
+            case SEND_FILE:
             {
             }
-            else if (queryType == 6)
+            case BROADCAST:
             {
-            }
-            else if (queryType == 6)
-            {
-            }
-            else if (queryType == 7)
-            {
-            }
-            else if (queryType == 8)
-            {
-            }
-            else if (queryType == 9)
-            {
-                ChatMessagePacket chatPacket;
+
                 for (auto &[user_id, socket] : clients)
                 {
                     if (client_socket != socket)
                     {
-                        chatPacket.sender = user_id;
+                        serialized_response = packet.serialize();
+                        send(socket, serialized_response.data(), serialized_response.size(), 0);
                     }
                 }
-                for (auto &[user_id, socket] : clients)
-                {
-                    if (client_socket != socket)
-                    {
-                        chatPacket.message = queryPacket.data;
-                        serialized_response = chatPacket.serialize();
-                        send(socket, serialized_response.c_str(), serialized_response.size(), 0);
-                    }
-                }
+                break;
             }
-            else if (queryType == 10)
+            case BLOCK_USER:
             {
             }
-            else if (queryType == 11)
+            case UNBLOCK_USER:
             {
             }
-            else if (queryType == 12)
+            case USER_PROFILE:
             {
             }
-            else if (queryType == 13)
+            case CHANGE_PASSWORD:
             {
             }
-            continue;
+            default:
+                // Optional: handle unknown command types
+                break;
+            }
         }
-
-
+        default:
+            // Optional: handle unknown packet types
+            break;
+        }
     }
 
     // ❌ Client disconnected
     {
         std::lock_guard<std::mutex> lock(client_mutex);
-        clients.erase(lsp.user_id);
+        clients.erase(username);
     }
     close(client_socket);
-    std::cout << "❌ Client " << lsp.user_id << " connection closed.\n";
+    std::cout << "❌ Client " << username << " connection closed.\n";
 }
 
 // 🌐 Start the TCP server and accept incoming connections

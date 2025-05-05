@@ -4,14 +4,11 @@
 #include <map>
 #include <string>
 #include <mutex>
-#include "../packets/QueryPacket.h"
-#include "../packets/LoginSignupPacket.h"
-#include "../packets/ChatMessagePacket.h"
-#include "../packets/FilePacket.h"
-#include "../packets/ACKPacket.h"
+
 #include "../packets/PacketType.h"
+#include "../packets/Packet.h"
 extern std::mutex user_mutex;
 extern std::map<std::string, std::string> users;
 
-AeroProtocolPacket register_user(AeroProtocolPacket authPacket);
-AeroProtocolPacket login_user(AeroProtocolPacket authPacket);
+AeroProtocolPacket register_user(AeroProtocolPacket &authPacket);
+AeroProtocolPacket login_user(AeroProtocolPacket &authPacket);

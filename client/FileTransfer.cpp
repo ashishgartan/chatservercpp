@@ -1,5 +1,5 @@
 #include "ChatClient.h"
-#include "../packets/FilePacket.h"
+#include "../packets/Packet.h"
 #include <filesystem>
 #include <iostream>
 #include <fstream>
@@ -47,14 +47,15 @@ void ChatClient::send_file_by_chunks(const std::string &receiver, const std::str
     size_t chunks_count = (filesize / available_data_size) + (filesize % available_data_size == 0 ? 0 : 1); // Total chunks
     size_t bytes_sent = 0;
     std::cout << "📦 Number of chunks to send: " << chunks_count << "\n";
-    FilePacket filePacket;
-    filePacket.sender = user_id;
-    filePacket.receiver = receiver;
-    filePacket.total_size = filesize;
-    filePacket.filename = filename;
+    
+    AeroProtocolPacket filePacket;
+    filePacket.senderId = user_id;
+    filePacket.receiverId = receiver;
+    filePacket.fileName = filename;
+
     for (size_t chunk_number = 0; chunk_number < chunks_count; ++chunk_number)
     {
-        filePacket.packet_number = chunk_number;
+        filePacket.header.sequenceNumber = chunk_number;
 
         // Read the chunk data
         size_t bytes_to_read = std::min(chunk_size, filesize - chunk_number * chunk_size);
@@ -63,8 +64,8 @@ void ChatClient::send_file_by_chunks(const std::string &receiver, const std::str
         filePacket.data.assign(buffer.begin(), buffer.end());
 
         // Serialize the filePacket before sending
-        std::string serialized_data = filePacket.serialize();
-        send(client_socket, serialized_data.c_str(), serialized_data.size(), 0);
+        auto serialized_data = filePacket.serialize();
+        send(client_socket, serialized_data.data(), serialized_data.size(), 0);
         usleep(100000); // Simulate network delay
 
         bytes_sent += bytes_to_read;
@@ -79,10 +80,10 @@ void ChatClient::send_file_by_chunks(const std::string &receiver, const std::str
     return;
 }
 
-void ChatClient::receive_data(FilePacket filePacket)
+void ChatClient::receive_data(AeroProtocolPacket packet)
 {
     // Construct the filename
-    std::string output_filename = "From_" + filePacket.sender + "_" + filePacket.filename;
+    std::string output_filename = "From_" + packet.senderId + "_" + packet.fileName;
 
     // Open the file in binary mode, appending if the file exists, creating it if it doesn't
     std::ofstream output_file(output_filename, std::ios::binary | std::ios::app);
@@ -93,7 +94,7 @@ void ChatClient::receive_data(FilePacket filePacket)
     }
 
     // Write the file chunk data
-    output_file.write(filePacket.data.c_str(), filePacket.data.size());
+    output_file.write(packet.data.data(), packet.data.size());
 
     // Close the file
     output_file.close();

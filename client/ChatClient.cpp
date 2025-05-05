@@ -5,11 +5,6 @@
 #include <arpa/inet.h>
 #include <thread>
 #include <sstream>
-#include "../packets/QueryPacket.h"
-#include "../packets/LoginSignupPacket.h"
-#include "../packets/ChatMessagePacket.h"
-#include "../packets/FilePacket.h"
-#include "../packets/ACKPacket.h"
 #include "../packets/PacketType.h"
 #include "../packets/Packet.h"
 #include "../packets/CommandType.h"
@@ -95,17 +90,77 @@ ChatClient::ChatClient() : is_running(true)
 
         // Serialize and send the packet
         auto serialized_data = packet.serialize();
-        send(client_socket, serialized_data.data(), serialized_data.size(), 0);
 
-        // Receive ACK
-        char ack_buffer[1024] = {0};
-        recv(client_socket, ack_buffer, sizeof(ack_buffer), 0);
-        auto ack_packet = AeroProtocolPacket::deserialize(std::vector<char>(ack_buffer, ack_buffer + sizeof(ack_buffer)));
-
-        if (ack_packet.header.packetType == static_cast<int>(ACKNOWLEDGMENT))
+        auto printSerializedHex = [](const std::vector<char> &data)
         {
-            std::cout << "Server: " << std::string(ack_packet.payload.begin(), ack_packet.payload.end()) << std::endl;
-            break;
+            std::cout << "📦 Serialized Packet (" << data.size() << " bytes):\n";
+            for (size_t i = 0; i < data.size(); ++i)
+            {
+                printf("%02X ", static_cast<unsigned char>(data[i]));
+                if ((i + 1) % 16 == 0)
+                    std::cout << "\n";
+            }
+            std::cout << "\n";
+        };
+
+        printSerializedHex(serialized_data);
+
+        int bytesend = send(client_socket, serialized_data.data(), serialized_data.size(), 0);
+        std::cout << bytesend << " sent to server\n";
+        // Receive ACK
+        AeroProtocolHeader header;
+        long unsigned int bytes_received = 0;
+        while (bytes_received < sizeof(AeroProtocolHeader))
+        {
+            int chunk = recv(client_socket, ((char *)&header) + bytes_received, sizeof(AeroProtocolHeader) - bytes_received, 0);
+            if (chunk <= 0)
+            {
+                std::cout << "❌ Failed to receive header data from client.\n";
+                return;
+            }
+            bytes_received += chunk;
+        }
+
+        // Step 2: Receive the payload based on the payload size in the header
+        uint32_t payload_size = header.payloadSize;
+        if (payload_size == 0)
+        {
+            std::cout << "No payload data to receive.\n";
+            return; // No payload to process
+        }
+
+        // Receive the actual payload
+        char *received_payload = new char[payload_size];
+        unsigned int payload_received = 0;
+        while (payload_received < payload_size)
+        {
+            int chunk = recv(client_socket, received_payload + payload_received, payload_size - payload_received, 0);
+            if (chunk <= 0)
+            {
+                std::cout << "❌ Failed to receive payload data from client.\n";
+                delete[] received_payload;
+                return;
+            }
+            payload_received += chunk;
+        }
+
+        std::cout << "Received payload of size: " << payload_received << " bytes.\n";
+
+        // Step 3: Deserialize the packet and process the data based on packet type
+        AeroProtocolPacket ackPacket;
+        ackPacket.header = header;
+        ackPacket = AeroProtocolPacket::deserialize(header, received_payload);
+        delete[] received_payload; // Clean up the payload buffer after deserialization
+
+        if (ackPacket.statusCode == 1)
+        {
+            std::cout << GREEN << packet.message << RESET;
+            start();
+        }
+        else
+        {
+            std::cout << RED << packet.message << RESET;
+            continue;
         }
     }
 }
@@ -127,9 +182,9 @@ void ChatClient::sendMessages()
         std::cout << RED;
         std::getline(std::cin, message);
         std::cout << RESET;
-        QueryPacket queryPacket;
-        std::string serialized_packet;
-        if (message.rfind("/check", 0) == 0)
+        AeroProtocolPacket packet;
+        std::vector<char> serialized_data;
+        if (message.rfind("/checkOnline", 0) == 0)
         {
             std::istringstream iss(message);
             std::string cmd, user_id;
@@ -141,17 +196,19 @@ void ChatClient::sendMessages()
                 continue;
             }
 
-            queryPacket.data = user_id;
-            queryPacket.queryType = 0;
-            serialized_packet = queryPacket.serialize();
-            send(client_socket, serialized_packet.c_str(), serialized_packet.size(), 0);
+            packet.senderId = user_id;
+            packet.commandType = CHECK_ONLINE;
+            packet.header.packetType = COMMAND;
+            std::vector<char> serialized_packet = packet.serialize();
+            send(client_socket, serialized_packet.data(), serialized_packet.size(), 0);
         }
         else if (message.rfind("/logout", 0) == 0)
         {
-            queryPacket.data = user_id;
-            queryPacket.queryType = 1;
-            serialized_packet = queryPacket.serialize();
-            send(client_socket, serialized_packet.c_str(), serialized_packet.size(), 0);
+            packet.senderId = user_id;
+            packet.header.packetType = COMMAND;
+            packet.commandType = LOGOUT;
+            std::vector<char> serialized_packet = packet.serialize();
+            send(client_socket, serialized_packet.data(), serialized_packet.size(), 0);
         }
         else if (message.rfind("/history", 0) == 0)
         {
@@ -165,28 +222,32 @@ void ChatClient::sendMessages()
                 continue;
             }
 
-            queryPacket.data = user_id;
-            queryPacket.queryType = 2;
-            serialized_packet = queryPacket.serialize();
-            send(client_socket, serialized_packet.c_str(), serialized_packet.size(), 0);
+            packet.senderId = user_id;
+            packet.header.packetType = COMMAND;
+            packet.commandType = CHAT_HISTORY;
+            std::vector<char> serialized_packet = packet.serialize();
+            send(client_socket, serialized_packet.data(), serialized_packet.size(), 0);
         }
         else if (message.rfind("/delete_account", 0) == 0)
         {
-            queryPacket.queryType = 3;
-            serialized_packet = queryPacket.serialize();
-            send(client_socket, serialized_packet.c_str(), serialized_packet.size(), 0);
+            packet.senderId = user_id;
+            packet.header.packetType = COMMAND;
+            packet.commandType = DELETE_ACCOUNT;
+            std::vector<char> serialized_packet = packet.serialize();
+            send(client_socket, serialized_packet.data(), serialized_packet.size(), 0);
         }
         else if (message.rfind("/online_users", 0) == 0)
         {
-            queryPacket.queryType = 4;
-            serialized_packet = queryPacket.serialize();
-            // std::cout << serialized_packet << std::endl;
-            send(client_socket, serialized_packet.c_str(), serialized_packet.size(), 0);
+            packet.senderId = user_id;
+            packet.header.packetType = COMMAND;
+            packet.commandType = ONLINE_USERS;
+            std::vector<char> serialized_packet = packet.serialize();
+            send(client_socket, serialized_packet.data(), serialized_packet.size(), 0);
         }
         else if (message.rfind("/clear_chat", 0) == 0)
         {
             std::istringstream iss(message);
-            std::string cmd, user_id;
+            std::string cmd, receiver_id;
             iss >> cmd >> user_id;
             if (user_id.empty())
             {
@@ -195,10 +256,12 @@ void ChatClient::sendMessages()
                 continue;
             }
 
-            queryPacket.data = user_id;
-            queryPacket.queryType = 5;
-            serialized_packet = queryPacket.serialize();
-            send(client_socket, serialized_packet.c_str(), serialized_packet.size(), 0);
+            packet.senderId = user_id;
+            packet.receiverId = receiver_id;
+            packet.header.packetType = COMMAND;
+            packet.commandType = CLEAR_CHAT;
+            std::vector<char> serialized_packet = packet.serialize();
+            send(client_socket, serialized_packet.data(), serialized_packet.size(), 0);
         }
         else if (message.rfind("/help", 0) == 0)
         {
@@ -221,16 +284,16 @@ void ChatClient::sendMessages()
         else if (message.rfind("/sendfile", 0) == 0)
         {
             std::istringstream iss(message);
-            std::string cmd, receiver, filepath;
-            iss >> cmd >> receiver >> filepath;
-            if (receiver.empty() || filepath.empty())
+            std::string cmd, receiver_id, filepath;
+            iss >> cmd >> receiver_id >> filepath;
+            if (receiver_id.empty() || filepath.empty())
             {
                 std::cout << RED << "❗ Usage: /sendfile <receiver> <file_path>\n"
                           << RESET;
                 continue;
             }
 
-            std::thread file_thread(&ChatClient::send_file_by_chunks, this, receiver, filepath, client_socket);
+            std::thread file_thread(&ChatClient::send_file_by_chunks, this, receiver_id, filepath, client_socket);
             file_thread.detach();
         }
         else if (message.rfind("/broadcast", 0) == 0)
@@ -245,44 +308,50 @@ void ChatClient::sendMessages()
                 continue;
             }
 
-            queryPacket.data = msg;
-            queryPacket.queryType = 9;
-            serialized_packet = queryPacket.serialize();
-            send(client_socket, serialized_packet.c_str(), serialized_packet.size(), 0);
+            packet.senderId = user_id;
+            packet.header.packetType = COMMAND;
+            packet.commandType = BROADCAST;
+            packet.message = msg;
+            std::vector<char> serialized_packet = packet.serialize();
+            send(client_socket, serialized_packet.data(), serialized_packet.size(), 0);
         }
         else if (message.rfind("/block", 0) == 0)
         {
             std::istringstream iss(message);
-            std::string cmd, user_id;
-            iss >> cmd >> user_id;
-            if (user_id.empty())
+            std::string cmd, receiver_id;
+            iss >> cmd >> receiver_id;
+            if (receiver_id.empty())
             {
                 std::cout << RED << "❗ Usage: /block <user_id>\n"
                           << RESET;
                 continue;
             }
 
-            queryPacket.data = user_id;
-            queryPacket.queryType = 10;
-            serialized_packet = queryPacket.serialize();
-            send(client_socket, serialized_packet.c_str(), serialized_packet.size(), 0);
+            packet.senderId = user_id;
+            packet.receiverId = receiver_id;
+            packet.header.packetType = COMMAND;
+            packet.commandType = BLOCK_USER;
+            std::vector<char> serialized_packet = packet.serialize();
+            send(client_socket, serialized_packet.data(), serialized_packet.size(), 0);
         }
         else if (message.rfind("/unblock", 0) == 0)
         {
             std::istringstream iss(message);
-            std::string cmd, user_id;
-            iss >> cmd >> user_id;
-            if (user_id.empty())
+            std::string cmd, receiver_id;
+            iss >> cmd >> receiver_id;
+            if (receiver_id.empty())
             {
                 std::cout << RED << "❗ Usage: /unblock <user_id>\n"
                           << RESET;
                 continue;
             }
 
-            queryPacket.data = user_id;
-            queryPacket.queryType = 11;
-            serialized_packet = queryPacket.serialize();
-            send(client_socket, serialized_packet.c_str(), serialized_packet.size(), 0);
+            packet.senderId = user_id;
+            packet.receiverId = receiver_id;
+            packet.header.packetType = COMMAND;
+            packet.commandType = UNBLOCK_USER;
+            std::vector<char> serialized_packet = packet.serialize();
+            send(client_socket, serialized_packet.data(), serialized_packet.size(), 0);
         }
         else if (message.rfind("/profile", 0) == 0)
         {
@@ -291,29 +360,36 @@ void ChatClient::sendMessages()
         else if (message.rfind("/changepass", 0) == 0)
         {
             std::istringstream iss(message);
-            std::string cmd, receiver, filepath;
-            iss >> cmd >> receiver >> filepath;
-            if (receiver.empty() || filepath.empty())
+            std::string cmd, new_pass, confirm_new_pass;
+            iss >> cmd >> new_pass >> confirm_new_pass;
+            if (new_pass.empty() || confirm_new_pass.empty())
             {
-                std::cout << RED << "❗ Usage: /sendData <receiver> <file_path>\n"
+                std::cout << RED << "❗ Usage: /changepass new_pass confirm_new_pass\n"
                           << RESET;
                 continue;
             }
+            else if (new_pass != confirm_new_pass)
+            {
+                std::cout << RED << "❗ Password Mismatch.\n"
+                          << RESET;
+            }
 
-            std::thread file_thread(&ChatClient::send_file_by_chunks, this, receiver, filepath, client_socket);
-            file_thread.detach();
+            packet.senderId = user_id;
+            packet.header.packetType = COMMAND;
+            packet.commandType = CHANGE_PASSWORD;
+            std::vector<char> serialized_packet = packet.serialize();
+            send(client_socket, serialized_packet.data(), serialized_packet.size(), 0);
         }
         else
         {
             size_t space_pos = message.find(' ');
             if (space_pos != std::string::npos)
             {
-                ChatMessagePacket chatPacket;
-                chatPacket.sender = user_id;
-                chatPacket.receiver = message.substr(0, space_pos);
-                chatPacket.message = message.substr(space_pos + 1);
-                serialized_packet = chatPacket.serialize();
-                send(client_socket, serialized_packet.c_str(), serialized_packet.size(), 0);
+                packet.senderId = user_id;
+                packet.receiverId = message.substr(0, space_pos);
+                packet.message = message.substr(space_pos + 1);
+                serialized_data = packet.serialize();
+                send(client_socket, serialized_data.data(), serialized_data.size(), 0);
             }
 
             if (message == "exit")
@@ -330,79 +406,122 @@ void ChatClient::receiveMessages()
 {
     while (is_running)
     {
-        char received_serialized_data[4096] = {0};
-        int bytes_read = recv(client_socket, received_serialized_data, sizeof(received_serialized_data), 0);
-        if (bytes_read <= 0)
+        // Receive ACK
+        AeroProtocolHeader header;
+        long unsigned int bytes_received = 0;
+        while (bytes_received < sizeof(AeroProtocolHeader))
         {
-            std::cout << "\n🔌 Disconnected from server.\n";
-            is_running = false;
+            int chunk = recv(client_socket, ((char *)&header) + bytes_received, sizeof(AeroProtocolHeader) - bytes_received, 0);
+            if (chunk <= 0)
+            {
+                std::cout << "\n🔌 Disconnected from server.\n";
+                is_running = false;
+                break;
+            }
+            bytes_received += chunk;
+        }
+
+        // Step 2: Receive the payload based on the payload size in the header
+        uint32_t payload_size = header.payloadSize;
+        if (payload_size == 0)
+        {
+            std::cout << "No payload data to receive.\n";
+            return; // No payload to process
+        }
+
+        // Receive the actual payload
+        char *received_payload = new char[payload_size];
+        unsigned int payload_received = 0;
+        while (payload_received < payload_size)
+        {
+            int chunk = recv(client_socket, received_payload + payload_received, payload_size - payload_received, 0);
+            if (chunk <= 0)
+            {
+                std::cout << "❌ Failed to receive payload data from client.\n";
+                delete[] received_payload;
+                return;
+            }
+            payload_received += chunk;
+        }
+
+        std::cout << "Received payload of size: " << payload_received << " bytes.\n";
+
+        // Step 3: Deserialize the packet and process the data based on packet type
+        AeroProtocolPacket packet;
+        packet.header = header;
+        packet = AeroProtocolPacket::deserialize(header, received_payload);
+        delete[] received_payload; // Clean up the payload buffer after deserialization
+
+        switch (packet.header.packetType)
+        {
+        case MESSAGE:
+        {
+            std::cout << packet.senderId << " : " << packet.message << RESET << std::endl;
+        }
+        case FILE_CHUNK:
+        {
+            receive_data(packet); // Adjust this line as needed
+        }
+        case ACKNOWLEDGMENT:
+        {
+            switch (packet.commandType)
+            {
+            case CHECK_ONLINE:
+            {
+                std::cout << packet.message << RESET << std::endl;
+            }
+            case LOGOUT:
+            {
+                std::cout << packet.message << RESET << std::endl;
+                break;
+            }
+            case CHAT_HISTORY:
+            {
+                std::cout << packet.message << RESET << std::endl;
+            }
+            case DELETE_ACCOUNT:
+            {
+                std::cout << packet.message << RESET << std::endl;
+            }
+            case ONLINE_USERS:
+            {
+                std::cout << "Online Users:" << packet.message << RESET << std::endl;
+            }
+            case CLEAR_CHAT:
+            {
+                std::cout << packet.message << RESET << std::endl;
+            }
+            case SEND_FILE:
+            {
+                std::cout << packet.message << RESET << std::endl;
+            }
+            case BROADCAST:
+            {
+                std::cout << packet.message << RESET << std::endl;
+            }
+            case BLOCK_USER:
+            {
+            }
+            case UNBLOCK_USER:
+            {
+            }
+            case USER_PROFILE:
+            {
+            }
+            case CHANGE_PASSWORD:
+            {
+            }
+            default:
+                // Optional: handle unknown command types
+                break;
+            }
+        }
+        default:
+            // Optional: handle unknown packet types
             break;
         }
-
-        // Extract the packet type from the received data
-        std::string data_str(received_serialized_data);
-        int type = 0;
-        size_t pos = data_str.find('|'); // Assuming packetType is the first part of the string
-        type = std::stoi(data_str.substr(0, pos));
-        std::string queryresponse = "";
-        if (type == 3)
-        {
-            ChatMessagePacket chatPacket;
-            chatPacket.deserialize(received_serialized_data);
-            std::cout << GREEN << chatPacket.sender << ": " << chatPacket.message << RESET << std::endl;
-        }
-        else if (type == 4)
-        {
-            FilePacket filePacket;
-            filePacket.deserialize(received_serialized_data);
-            receive_data(filePacket); // Adjust this line as needed
-        }
-        else if (type == 6)
-        {
-            QueryPacket queryPacket;
-            queryPacket.deserialize(received_serialized_data);
-
-            if (queryPacket.queryType == 2)
-            {
-                // Check if the received data contains the emoji for a new line
-                if (queryPacket.data.find("↩️") != std::string::npos)
-                {
-                    // Replace the emoji with a newline character and continue printing
-                    size_t pos = queryPacket.data.find("↩️");
-                    while (pos != std::string::npos)
-                    {
-                        queryPacket.data.replace(pos, 2, "\n");
-                        pos = queryPacket.data.find("↩️", pos + 1);
-                    }
-                }
-
-                std::cout << GREEN << queryPacket.data << RESET << std::endl;
-            }
-            else if (queryPacket.queryType == 3)
-            {
-                if (queryPacket.data == "1")
-                {
-                    std::cout << GREEN << "✅ Account deleted successfully." << RESET << std::endl;
-                }
-                else
-                {
-                    std::cout << RED << "❌ Error deleting account" << RESET << std::endl;
-                }
-            }
-            else if (queryPacket.queryType == 4)
-            {
-                std::cout << GREEN << queryPacket.data << RESET << std::endl;
-            }
-        }
-        else
-        {
-            std::cout << YELLOW << "⚠️ Unknown packet type received.\n"
-                      << RESET;
-        }
     }
-    exit(0);
 }
-
 ChatClient::~ChatClient()
 {
     close(client_socket);

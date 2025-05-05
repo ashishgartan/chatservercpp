@@ -24,19 +24,22 @@ AeroProtocolPacket register_user(AeroProtocolPacket &authPacket)
     // Prepare ACK packet
     AeroProtocolPacket ackPacket;
     ackPacket.header.packetType = ACKNOWLEDGMENT;
-    ackPacket.header.sequenceNumber = 0;
     ackPacket.header.timestamp = std::time(nullptr);
 
     // Fill ackMessage field
     if (sqlite3_exec(db, query.c_str(), nullptr, nullptr, nullptr) == SQLITE_OK)
     {
         std::cout << "[✅] Registration successful for user: " << authPacket.username << std::endl;
-        ackPacket.ackMessage = "SUCCESS";
+        ackPacket.message = "SUCCESS";
+        ackPacket.statusCode = 1;
+
     }
     else
     {
         std::cout << "[❌] Registration failed for user: " << authPacket.username << ". User might already exist.\n";
-        ackPacket.ackMessage = "FAILURE: User already exists";
+        ackPacket.message = "FAILURE: User already exists";
+        ackPacket.statusCode = 0;
+
     }
 
     return ackPacket;
@@ -53,7 +56,6 @@ AeroProtocolPacket login_user(AeroProtocolPacket &authPacket)
 
     AeroProtocolPacket ackPacket;
     ackPacket.header.packetType = ACKNOWLEDGMENT;
-    ackPacket.header.sequenceNumber = 0;
     ackPacket.header.timestamp = std::time(nullptr);
 
     if (sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, nullptr) == SQLITE_OK)
@@ -61,19 +63,21 @@ AeroProtocolPacket login_user(AeroProtocolPacket &authPacket)
         if (sqlite3_step(stmt) == SQLITE_ROW)
         {
             std::cout << "[✅] Login successful for user: " << authPacket.username << std::endl;
-            ackPacket.ackMessage = "SUCCESS";
+            ackPacket.message = "SUCCESS";
+            ackPacket.statusCode = 1;
         }
         else
         {
             std::cout << "[❌] Login failed for user: " << authPacket.username << ". Reason: Invalid credentials." << std::endl;
-            ackPacket.ackMessage = "FAILURE: Invalid credentials";
+            ackPacket.message = "FAILURE: Invalid credentials";
+            ackPacket.statusCode = 0;
         }
         sqlite3_finalize(stmt);
     }
     else
     {
         std::cout << "[🔥] Login server/database error for user: " << authPacket.username << std::endl;
-        ackPacket.ackMessage = "FAILURE: Server/database error";
+        ackPacket.message = "FAILURE: Server/database error";
     }
 
     return ackPacket;

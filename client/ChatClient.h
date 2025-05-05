@@ -2,7 +2,7 @@
 #include <thread>
 #include <string>
 #include <arpa/inet.h>
-#include "../packets/FilePacket.h"
+#include "../packets/Packet.h"
 
 class ChatClient
 {
@@ -17,7 +17,7 @@ private:
 
     // Function to send a file by chunks using FilePackets
     void send_file_by_chunks(const std::string &receiver, const std::string &full_path, int client_socket);
-    void receive_data(FilePacket filePacket);
+    void receive_data(AeroProtocolPacket);
 
     std::string user_id;
     int client_socket;

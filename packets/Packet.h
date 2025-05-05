@@ -7,40 +7,36 @@
 
 #pragma pack(push, 1)
 struct AeroProtocolHeader {
-    uint32_t packetType;       // Type of the packet (e.g., login, register, message)
-    uint32_t payloadSize;      // Size of the payload (excluding header)
-    uint32_t sequenceNumber;   // Sequence number for data integrity (if needed)
-    uint64_t timestamp;        // Timestamp when the packet is created
+    uint32_t packetType = 0;       // Type of the packet (e.g., login, register, message)
+    uint32_t payloadSize = 0;      // Size of the payload (excluding header)
+    uint32_t sequenceNumber = 0;   // Sequence number for data integrity (if needed)
+    uint64_t timestamp = 0;        // Timestamp when the packet is created
 };
 #pragma pack(pop)
 
 struct AeroProtocolPacket {
-    AeroProtocolHeader header;
-    std::vector<char> payload;
+    AeroProtocolHeader header={};
+    std::vector<char> payload = {};
 
     // Fields based on packetType
-    std::string senderId;      // User ID of the sender
-    std::string receiverId;    // User ID of the receiver
-    std::string message;       // Message content (e.g., text)
-    std::string username;      // For login or user-related packets
-    std::string password;      // For login or authentication packets
-    std::string ackMessage;    // For ACK packets (optional)
-    int32_t statusCode;        // To represent success/failure numerically
-    std::string fileName;      // File name (optional for file transfers)
-    std::vector<char> fileData; // File data (optional for file transfers)
+    std::string senderId = "";      // User ID of the sender
+    std::string receiverId = "";    // User ID of the receiver
+    std::string message = "";       // Message content (e.g., text)
+    uint32_t commandType = 0;      // Command type(e.g.,/sendfile,/changepass....)
+    std::string username = "";      // For login or user-related packets
+    std::string password = "";      // For login or authentication packets
+    int32_t statusCode = 0;        // To represent success/failure numerically
+    std::string fileName = "";      // File name (optional for file transfers)
+    std::vector<char> data = {}; // data (optional for file transfers or any kind of data transfer)
 
     // Serialize and Deserialize methods
     std::vector<char> serialize();
     static AeroProtocolPacket deserialize(AeroProtocolHeader,const char *);
 
     std::string toString();
-private:
-    // Helper methods for handling length-prefixed strings
-    static void writeString(std::vector<char>& buffer, const std::string& str);
-    static std::string readString(const std::vector<char>& buffer, size_t& offset);
 };
 
-/*
+/** 
 .....................................................................................
 🔹 Core Fields (for all packet types) – already in AeroProtocolHeader
 ............................................................................

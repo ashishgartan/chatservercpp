@@ -5,10 +5,9 @@
 #include <mutex>
 #include <unordered_set>
 #include <arpa/inet.h>
-
+#include <../packets/Packet.h>
 #include <map>
 #include <string>
-#include "../packets/QueryPacket.h"
 
 // ANSI color codes
 #define GREEN "\033[32m"
@@ -124,18 +123,20 @@ void send_chat_history_in_chunks(const std::string &user_id_1, const std::string
     std::cout << "📦 Number of chunks to send: " << chunks_count << "\n";
     for (size_t i = 0; i < chunks_count; ++i)
     {
-        QueryPacket queryPacket;
-        queryPacket.queryType = 2; // Assuming 2 is for "chat history"
+        AeroProtocolPacket queryPacket;
+        queryPacket.header.packetType = 2; // Assuming 2 is for "chat history"
 
         // Calculate start and end positions for this chunk's data
         size_t start = i * available_data_size;
         size_t end = std::min((i + 1) * available_data_size, history_size);
-        queryPacket.data = history.substr(start, end - start);
+        std::string subhistory = history.substr(start, end - start);
+        std::vector<char> data(subhistory.begin(),subhistory.end());
+        queryPacket.data = data;
 
         // Serialize and send the packet
-        std::string serialized_chunk = queryPacket.serialize();
+        auto serialized_chunk = queryPacket.serialize();
         // std::cout << serialized_chunk;
-        if (send(client_socket, serialized_chunk.c_str(), serialized_chunk.length(), 0) == -1)
+        if (send(client_socket, serialized_chunk.data(), serialized_chunk.size(), 0) == -1)
         {
             perror("❌ Send failed");
             break;
